@@ -42,9 +42,11 @@ app.use(
     resave: false,
     saveUninitialized: false,
     proxy: true,
+    rolling: true,
     store: MongoStore.create({
       mongoUrl: process.env.MONGO_URL,
       collectionName: "sessions",
+      ttl: 60 * 60 * 24 * 7,
     }),
     cookie: {
       httpOnly: true,

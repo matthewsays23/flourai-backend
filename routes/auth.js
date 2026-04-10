@@ -12,31 +12,43 @@ const isProduction = process.env.NODE_ENV === "production";
 
 router.get("/roblox/start", async (req, res) => {
   try {
-    const codeVerifier = createCodeVerifier();
-    const codeChallenge = createCodeChallenge(codeVerifier);
-    const state = createState();
-
-    req.session.oauth_state = state;
-    req.session.code_verifier = codeVerifier;
-
-    req.session.save((err) => {
-      if (err) {
-        console.error("Failed to save auth session:", err);
+    req.session.regenerate((regenErr) => {
+      if (regenErr) {
+        console.error("Session regenerate error:", regenErr);
         return res.status(500).send("Failed to start Roblox login.");
       }
 
-      const params = new URLSearchParams({
-        client_id: process.env.ROBLOX_CLIENT_ID,
-        redirect_uri: process.env.ROBLOX_REDIRECT_URI,
-        response_type: "code",
-        scope: "openid profile",
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: "S256",
-      });
+      const codeVerifier = createCodeVerifier();
+      const codeChallenge = createCodeChallenge(codeVerifier);
+      const state = createState();
 
-      const authUrl = `https://apis.roblox.com/oauth/v1/authorize?${params.toString()}`;
-      return res.redirect(authUrl);
+      req.session.oauth_state = state;
+      req.session.code_verifier = codeVerifier;
+
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          console.error("Failed to save auth session:", saveErr);
+          return res.status(500).send("Failed to start Roblox login.");
+        }
+
+        console.log("OAuth start session saved:", {
+          sessionID: req.sessionID,
+          state,
+        });
+
+        const params = new URLSearchParams({
+          client_id: process.env.ROBLOX_CLIENT_ID,
+          redirect_uri: process.env.ROBLOX_REDIRECT_URI,
+          response_type: "code",
+          scope: "openid profile",
+          state,
+          code_challenge: codeChallenge,
+          code_challenge_method: "S256",
+        });
+
+        const authUrl = `https://apis.roblox.com/oauth/v1/authorize?${params.toString()}`;
+        return res.redirect(authUrl);
+      });
     });
   } catch (error) {
     console.error("Roblox start auth error:", error.response?.data || error.message);
@@ -48,6 +60,14 @@ router.get("/roblox/callback", async (req, res) => {
   try {
     const { code, state } = req.query;
 
+    console.log("OAuth callback hit:", {
+      codeExists: !!code,
+      stateFromQuery: state,
+      sessionID: req.sessionID,
+      sessionState: req.session?.oauth_state,
+      hasVerifier: !!req.session?.code_verifier,
+    });
+
     if (!code || !state) {
       return res.status(400).send("Missing code or state.");
     }
@@ -56,7 +76,7 @@ router.get("/roblox/callback", async (req, res) => {
       return res.status(400).send("Session missing.");
     }
 
-    if (!req.session.oauth_state) {
+    if (!req.session.oauth_state || !req.session.code_verifier) {
       return res.status(400).send("OAuth session expired or missing.");
     }
 
@@ -114,6 +134,8 @@ router.get("/roblox/callback", async (req, res) => {
         console.error("Session save error:", err);
         return res.status(500).send("Failed to save login session.");
       }
+
+      console.log("User logged in successfully:", req.session.user);
 
       return res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
     });
