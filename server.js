@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const session = require("express-session");
+const MongoStore = require("connect-mongo");
 
 const authRoutes = require("./routes/auth");
 
@@ -32,6 +33,10 @@ app.use(
     resave: false,
     saveUninitialized: false,
     proxy: true,
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGO_URL,
+      collectionName: "sessions",
+    }),
     cookie: {
       httpOnly: true,
       secure: true,

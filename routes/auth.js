@@ -17,7 +17,6 @@ router.get("/roblox/start", async (req, res) => {
     req.session.oauth_state = state;
     req.session.code_verifier = codeVerifier;
 
-    // Explicitly save session before redirecting away to Roblox
     req.session.save((err) => {
       if (err) {
         console.error("Failed to save auth session:", err);
@@ -91,21 +90,13 @@ router.get("/roblox/callback", async (req, res) => {
 
     req.session.user = {
       robloxId: robloxUser.sub,
-      username:
-        robloxUser.preferred_username ||
-        robloxUser.name ||
-        "Roblox User",
-      displayName:
-        robloxUser.name ||
-        robloxUser.preferred_username ||
-        "Roblox User",
+      username: robloxUser.preferred_username || robloxUser.name || "Roblox User",
+      displayName: robloxUser.name || robloxUser.preferred_username || "Roblox User",
     };
 
-    // Clean up one-time auth values
     delete req.session.oauth_state;
     delete req.session.code_verifier;
 
-    // Save session before redirecting back to frontend
     req.session.save((err) => {
       if (err) {
         console.error("Session save error:", err);
@@ -115,10 +106,7 @@ router.get("/roblox/callback", async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
     });
   } catch (error) {
-    console.error(
-      "Roblox callback error:",
-      error.response?.data || error.message
-    );
+    console.error("Roblox callback error:", error.response?.data || error.message);
     return res.status(500).send("Roblox login failed.");
   }
 });
@@ -137,7 +125,6 @@ router.get("/me", (req, res) => {
 router.post("/logout", (req, res) => {
   req.session.destroy((err) => {
     if (err) {
-      console.error("Logout error:", err);
       return res.status(500).json({ error: "Failed to log out" });
     }
 
