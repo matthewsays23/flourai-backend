@@ -8,6 +8,8 @@ const {
 
 const router = express.Router();
 
+const isProduction = process.env.NODE_ENV === "production";
+
 router.get("/roblox/start", async (req, res) => {
   try {
     const codeVerifier = createCodeVerifier();
@@ -54,6 +56,10 @@ router.get("/roblox/callback", async (req, res) => {
       return res.status(400).send("Session missing.");
     }
 
+    if (!req.session.oauth_state) {
+      return res.status(400).send("OAuth session expired or missing.");
+    }
+
     if (state !== req.session.oauth_state) {
       return res.status(400).send("Invalid OAuth state.");
     }
@@ -90,8 +96,14 @@ router.get("/roblox/callback", async (req, res) => {
 
     req.session.user = {
       robloxId: robloxUser.sub,
-      username: robloxUser.preferred_username || robloxUser.name || "Roblox User",
-      displayName: robloxUser.name || robloxUser.preferred_username || "Roblox User",
+      username:
+        robloxUser.preferred_username ||
+        robloxUser.name ||
+        "Roblox User",
+      displayName:
+        robloxUser.name ||
+        robloxUser.preferred_username ||
+        "Roblox User",
     };
 
     delete req.session.oauth_state;
@@ -130,8 +142,8 @@ router.post("/logout", (req, res) => {
 
     res.clearCookie("flourai.sid", {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
     });
 
     return res.json({ ok: true });

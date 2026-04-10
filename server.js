@@ -10,18 +10,27 @@ const authRoutes = require("./routes/auth");
 
 const app = express();
 
+const isProduction = process.env.NODE_ENV === "production";
+
 app.set("trust proxy", 1);
 
 app.use(express.json());
 app.use(cookieParser());
 
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://flourai.io",
+  "https://www.flourai.io",
+];
+
 app.use(
   cors({
-    origin: [
-      "http://localhost:5173",
-      "https://flourai.io",
-      "https://www.flourai.io",
-    ],
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`CORS blocked for origin: ${origin}`));
+    },
     credentials: true,
   })
 );
@@ -39,8 +48,8 @@ app.use(
     }),
     cookie: {
       httpOnly: true,
-      secure: true,
-      sameSite: "none",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
@@ -52,6 +61,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Server running");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
