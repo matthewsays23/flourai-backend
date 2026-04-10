@@ -49,10 +49,10 @@ app.use(
       ttl: 60 * 60 * 24 * 7,
     }),
     cookie: {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
-      maxAge: 1000 * 60 * 60 * 24 * 7,
+  httpOnly: true,
+  secure: true,
+  sameSite: "lax",
+  maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })
 );
