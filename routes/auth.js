@@ -156,6 +156,23 @@ router.get("/me", (req, res) => {
   });
 });
 
+router.get("/avatar/:userId", async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const response = await axios.get(
+      `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`
+    );
+
+    const imageUrl = response.data?.data?.[0]?.imageUrl || "";
+
+    return res.json({ ok: true, imageUrl });
+  } catch (error) {
+    console.error("Avatar fetch error:", error.response?.data || error.message);
+    return res.status(500).json({ ok: false, error: "Failed to fetch avatar" });
+  }
+});
+
 router.post("/logout", (req, res) => {
   req.session.destroy((err) => {
     if (err) {
