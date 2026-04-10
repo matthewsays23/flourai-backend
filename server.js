@@ -9,15 +9,23 @@ const authRoutes = require("./routes/auth");
 
 const app = express();
 
+const isProduction = process.env.NODE_ENV === "production";
+
 app.use(express.json());
 app.use(cookieParser());
 
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL,
+    origin: [
+      "http://localhost:5173",
+      "https://flourai.io",
+      "https://www.flourai.io",
+    ],
     credentials: true,
   })
 );
+
+app.set("trust proxy", 1);
 
 app.use(
   session({
@@ -26,8 +34,8 @@ app.use(
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
-      secure: false, // IMPORTANT for localhost
-      sameSite: "lax",
+      secure: isProduction,
+      sameSite: isProduction ? "none" : "lax",
     },
   })
 );
