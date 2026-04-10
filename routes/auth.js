@@ -17,20 +17,28 @@ router.get("/roblox/start", async (req, res) => {
     req.session.oauth_state = state;
     req.session.code_verifier = codeVerifier;
 
-    const params = new URLSearchParams({
-      client_id: process.env.ROBLOX_CLIENT_ID,
-      redirect_uri: process.env.ROBLOX_REDIRECT_URI,
-      response_type: "code",
-      scope: "openid profile",
-      state,
-      code_challenge: codeChallenge,
-      code_challenge_method: "S256",
-    });
+    // Explicitly save session before redirecting away to Roblox
+    req.session.save((err) => {
+      if (err) {
+        console.error("Failed to save auth session:", err);
+        return res.status(500).send("Failed to start Roblox login.");
+      }
 
-    const authUrl = `https://apis.roblox.com/oauth/v1/authorize?${params.toString()}`;
-    return res.redirect(authUrl);
+      const params = new URLSearchParams({
+        client_id: process.env.ROBLOX_CLIENT_ID,
+        redirect_uri: process.env.ROBLOX_REDIRECT_URI,
+        response_type: "code",
+        scope: "openid profile",
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
+      });
+
+      const authUrl = `https://apis.roblox.com/oauth/v1/authorize?${params.toString()}`;
+      return res.redirect(authUrl);
+    });
   } catch (error) {
-    console.error("Roblox start auth error:", error.message);
+    console.error("Roblox start auth error:", error.response?.data || error.message);
     return res.status(500).send("Failed to start Roblox login.");
   }
 });
@@ -41,6 +49,10 @@ router.get("/roblox/callback", async (req, res) => {
 
     if (!code || !state) {
       return res.status(400).send("Missing code or state.");
+    }
+
+    if (!req.session) {
+      return res.status(400).send("Session missing.");
     }
 
     if (state !== req.session.oauth_state) {
@@ -79,11 +91,29 @@ router.get("/roblox/callback", async (req, res) => {
 
     req.session.user = {
       robloxId: robloxUser.sub,
-      username: robloxUser.preferred_username || robloxUser.name || "Roblox User",
-      displayName: robloxUser.name || robloxUser.preferred_username || "Roblox User",
+      username:
+        robloxUser.preferred_username ||
+        robloxUser.name ||
+        "Roblox User",
+      displayName:
+        robloxUser.name ||
+        robloxUser.preferred_username ||
+        "Roblox User",
     };
 
-    return res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
+    // Clean up one-time auth values
+    delete req.session.oauth_state;
+    delete req.session.code_verifier;
+
+    // Save session before redirecting back to frontend
+    req.session.save((err) => {
+      if (err) {
+        console.error("Session save error:", err);
+        return res.status(500).send("Failed to save login session.");
+      }
+
+      return res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
+    });
   } catch (error) {
     console.error(
       "Roblox callback error:",
@@ -93,9 +123,30 @@ router.get("/roblox/callback", async (req, res) => {
   }
 });
 
+router.get("/me", (req, res) => {
+  if (!req.session || !req.session.user) {
+    return res.status(401).json({ error: "Not logged in" });
+  }
+
+  return res.json({
+    ok: true,
+    user: req.session.user,
+  });
+});
+
 router.post("/logout", (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie("connect.sid");
+  req.session.destroy((err) => {
+    if (err) {
+      console.error("Logout error:", err);
+      return res.status(500).json({ error: "Failed to log out" });
+    }
+
+    res.clearCookie("flourai.sid", {
+      httpOnly: true,
+      secure: true,
+      sameSite: "none",
+    });
+
     return res.json({ ok: true });
   });
 });
