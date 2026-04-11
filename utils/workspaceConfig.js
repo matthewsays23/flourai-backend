@@ -7,7 +7,7 @@ const WORKSPACE_CONFIG = {
   directoryRankMin: 13,
   directoryRankMax: 255,
 
-  refreshRoleBinds: ["Leadership", "Management"],
+  refreshRoleBinds: ["Owner", "Leadership", "Management"],
 };
 
 module.exports = {
