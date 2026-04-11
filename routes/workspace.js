@@ -4,7 +4,6 @@ const { getDb } = require("../lib/mongo");
 const { WORKSPACE_CONFIG } = require("../utils/workspaceConfig");
 const {
   getUserGroupRole,
-  getGroupRoles,
   getAllGroupMembers,
   getAvatarHeadshots,
 } = require("../utils/robloxGroup");
@@ -43,20 +42,17 @@ async function buildWorkspaceAccess(user) {
     };
   }
 
-  const canViewMembers = hasBoundRole(
-    viewerRole.roleName,
-    WORKSPACE_CONFIG.directoryRoleBinds
-  );
-
-  const canRefreshMembers = hasBoundRole(
-    viewerRole.roleName,
-    WORKSPACE_CONFIG.refreshRoleBinds
-  );
-
   const db = await getDb();
   const settings = await db.collection("workspaceSettings").findOne({
     groupId: WORKSPACE_CONFIG.groupId,
   });
+
+  const canViewMembers = true;
+
+  const canRefreshMembers = hasBoundRole(
+    viewerRole.roleName,
+    WORKSPACE_CONFIG.refreshRoleBinds || []
+  );
 
   return {
     workspace: {
@@ -98,10 +94,10 @@ router.get("/members", requireAuth, async (req, res) => {
   try {
     const access = await buildWorkspaceAccess(req.session.user);
 
-    if (!access.permissions.canViewMembers) {
+    if (!access.viewer.inGroup) {
       return res.status(403).json({
         ok: false,
-        error: "You do not have access to the members directory",
+        error: "You are not in the Flourai group",
       });
     }
 
@@ -156,15 +152,16 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
 
     const allMembers = await getAllGroupMembers(WORKSPACE_CONFIG.groupId, 100);
 
-    const roleNamesInDirectory = new Set(
-      WORKSPACE_CONFIG.directoryRoleBinds.map((role) => role.toLowerCase())
-    );
-
     const userIds = allMembers.map((member) => String(member.user.userId));
     const avatarMap = await getAvatarHeadshots(userIds);
 
     const docs = allMembers.map((member) => {
       const roleName = member.role?.name || "Member";
+      const rank = Number(member.role?.rank || 0);
+
+      const inDirectory =
+        rank >= Number(WORKSPACE_CONFIG.directoryRankMin || 23) &&
+        rank <= Number(WORKSPACE_CONFIG.directoryRankMax || 44);
 
       return {
         groupId: WORKSPACE_CONFIG.groupId,
@@ -175,8 +172,8 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
         roleId: member.role?.id || null,
         roleName,
         roleLabel: roleName,
-        rank: member.role?.rank || 0,
-        inDirectory: roleNamesInDirectory.has(roleName.toLowerCase()),
+        rank,
+        inDirectory,
         lastSyncedAt: new Date(),
       };
     });
@@ -207,8 +204,9 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
           groupId: WORKSPACE_CONFIG.groupId,
           workspaceName: WORKSPACE_CONFIG.name,
           lastMemberSync: new Date(),
-          directoryRoleBinds: WORKSPACE_CONFIG.directoryRoleBinds,
-          refreshRoleBinds: WORKSPACE_CONFIG.refreshRoleBinds,
+          directoryRankMin: Number(WORKSPACE_CONFIG.directoryRankMin || 23),
+          directoryRankMax: Number(WORKSPACE_CONFIG.directoryRankMax || 44),
+          refreshRoleBinds: WORKSPACE_CONFIG.refreshRoleBinds || [],
         },
       },
       { upsert: true }
