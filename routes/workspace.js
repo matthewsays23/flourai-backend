@@ -82,7 +82,7 @@ router.get("/access", requireAuth, async (req, res) => {
       ...access,
     });
   } catch (error) {
-    console.error("Workspace access error:", error.message);
+    console.error("Workspace access error:", error);
     return res.status(500).json({
       ok: false,
       error: "Failed to load workspace access",
@@ -129,7 +129,7 @@ router.get("/members", requireAuth, async (req, res) => {
       members: normalized,
     });
   } catch (error) {
-    console.error("Workspace members error:", error.message);
+    console.error("Workspace members error:", error);
     return res.status(500).json({
       ok: false,
       error: "Failed to load members",
@@ -152,7 +152,10 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
 
     const allMembers = await getAllGroupMembers(WORKSPACE_CONFIG.groupId, 100);
 
-    const userIds = allMembers.map((member) => String(member.user.userId));
+    const userIds = allMembers
+      .map((member) => String(member.user?.userId))
+      .filter(Boolean);
+
     const avatarMap = await getAvatarHeadshots(userIds);
 
     const docs = allMembers.map((member) => {
@@ -215,12 +218,13 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
     return res.json({
       ok: true,
       synced: docs.length,
+      inDirectory: docs.filter((doc) => doc.inDirectory).length,
     });
   } catch (error) {
-    console.error("Workspace refresh error:", error.message);
+    console.error("Workspace refresh error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Failed to refresh members",
+      error: error.message || "Failed to refresh members",
     });
   }
 });
