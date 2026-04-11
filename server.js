@@ -52,6 +52,7 @@ app.use(
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
+      domain: isProduction ? ".flourai.io" : undefined,
       maxAge: 1000 * 60 * 60 * 24 * 7,
     },
   })

@@ -183,6 +183,7 @@ router.post("/logout", (req, res) => {
       httpOnly: true,
       secure: isProduction,
       sameSite: isProduction ? "none" : "lax",
+      domain: isProduction ? ".flourai.io" : undefined,
     });
 
     return res.json({ ok: true });
