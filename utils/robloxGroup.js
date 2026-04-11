@@ -40,9 +40,7 @@ async function getAllGroupMembers(groupId, limit = 100) {
   let pageCount = 0;
 
   while (pageCount < 10) {
-    const url = new URL(
-      `https://groups.roblox.com/v1/groups/${groupId}/users`
-    );
+    const url = new URL(`https://groups.roblox.com/v1/groups/${groupId}/users`);
 
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("sortOrder", "Asc");
@@ -70,22 +68,28 @@ async function getAllGroupMembers(groupId, limit = 100) {
 async function getAvatarHeadshots(userIds = []) {
   if (!userIds.length) return {};
 
-  const response = await axios.get(
-    "https://thumbnails.roblox.com/v1/users/avatar-headshot",
-    {
-      params: {
-        userIds: userIds.join(","),
-        size: "150x150",
-        format: "Png",
-        isCircular: false,
-      },
-    }
-  );
-
+  const uniqueUserIds = [...new Set(userIds.map(String).filter(Boolean))];
+  const chunkSize = 50;
   const map = {};
 
-  for (const item of response.data?.data || []) {
-    map[String(item.targetId)] = item.imageUrl || "";
+  for (let i = 0; i < uniqueUserIds.length; i += chunkSize) {
+    const chunk = uniqueUserIds.slice(i, i + chunkSize);
+
+    const response = await axios.get(
+      "https://thumbnails.roblox.com/v1/users/avatar-headshot",
+      {
+        params: {
+          userIds: chunk.join(","),
+          size: "150x150",
+          format: "Png",
+          isCircular: false,
+        },
+      }
+    );
+
+    for (const item of response.data?.data || []) {
+      map[String(item.targetId)] = item.imageUrl || "";
+    }
   }
 
   return map;
