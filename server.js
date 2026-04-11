@@ -7,6 +7,7 @@ const session = require("express-session");
 const MongoStore = require("connect-mongo");
 
 const authRoutes = require("./routes/auth");
+const workspaceRoutes = require("./routes/workspace");
 
 const app = express();
 
@@ -25,7 +26,7 @@ const allowedOrigins = [
 
 app.use(
   cors({
-    origin: function (origin, callback) {
+    origin(origin, callback) {
       if (!origin || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
@@ -63,6 +64,15 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/auth", authRoutes);
+app.use("/api/workspace", workspaceRoutes);
+
+app.use((err, req, res, next) => {
+  console.error("Unhandled server error:", err);
+  res.status(500).json({
+    ok: false,
+    error: err.message || "Internal server error",
+  });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
