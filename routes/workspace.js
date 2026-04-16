@@ -371,32 +371,31 @@ router.post("/members/:userId/warnings", requireAuth, async (req, res) => {
     };
 
     await db.collection("workspaceMemberProfiles").updateOne(
-      {
-        groupId: WORKSPACE_CONFIG.groupId,
-        userId,
+  {
+    groupId: WORKSPACE_CONFIG.groupId,
+    userId,
+  },
+  {
+    $setOnInsert: {
+      groupId: WORKSPACE_CONFIG.groupId,
+      userId,
+      weeklyActivity: createDefaultWeeklyActivity(),
+      suspensions: [],
+      notes: [],
+      createdAt: new Date(),
+    },
+    $push: {
+      warnings: {
+        $each: [warning],
+        $position: 0,
       },
-      {
-        $setOnInsert: {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId,
-          weeklyActivity: createDefaultWeeklyActivity(),
-          warnings: [],
-          suspensions: [],
-          notes: [],
-          createdAt: new Date(),
-        },
-        $push: {
-          warnings: {
-            $each: [warning],
-            $position: 0,
-          },
-        },
-        $set: {
-          updatedAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
+    },
+    $set: {
+      updatedAt: new Date(),
+    },
+  },
+  { upsert: true }
+);
 
     const profile = await buildMemberProfilePayload(db, req, memberDoc);
 
