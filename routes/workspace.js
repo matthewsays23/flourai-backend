@@ -536,32 +536,31 @@ router.post("/members/:userId/suspensions", requireAuth, async (req, res) => {
     };
 
     await db.collection("workspaceMemberProfiles").updateOne(
-      {
-        groupId: WORKSPACE_CONFIG.groupId,
-        userId,
+  {
+    groupId: WORKSPACE_CONFIG.groupId,
+    userId,
+  },
+  {
+    $setOnInsert: {
+      groupId: WORKSPACE_CONFIG.groupId,
+      userId,
+      weeklyActivity: createDefaultWeeklyActivity(),
+      warnings: [],
+      notes: [],
+      createdAt: new Date(),
+    },
+    $push: {
+      suspensions: {
+        $each: [suspension],
+        $position: 0,
       },
-      {
-        $setOnInsert: {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId,
-          weeklyActivity: createDefaultWeeklyActivity(),
-          warnings: [],
-          suspensions: [],
-          notes: [],
-          createdAt: new Date(),
-        },
-        $push: {
-          suspensions: {
-            $each: [suspension],
-            $position: 0,
-          },
-        },
-        $set: {
-          updatedAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
+    },
+    $set: {
+      updatedAt: new Date(),
+    },
+  },
+  { upsert: true }
+);
 
     const profile = await buildMemberProfilePayload(db, req, memberDoc);
 
