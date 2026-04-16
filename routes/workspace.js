@@ -43,7 +43,8 @@ function normalizeWeeklyActivity(weeklyActivity) {
 
   return defaults.map((day) => {
     const match = weeklyActivity.find(
-      (entry) => String(entry?.label || "").toLowerCase() === day.label.toLowerCase()
+      (entry) =>
+        String(entry?.label || "").toLowerCase() === day.label.toLowerCase()
     );
 
     return {
@@ -101,9 +102,8 @@ async function buildWorkspaceAccess(user) {
     WORKSPACE_CONFIG.refreshRoleBinds || []
   );
 
-  // Reuse refreshRoleBinds for now so owners/admins can manage member profiles.
   const canManageMembers = canRefreshMembers;
-  const canManageActivity = canRefreshMembers;
+  const canManageActivity = false;
 
   return {
     workspace: {
@@ -414,6 +414,73 @@ router.post("/members/:userId/warnings", requireAuth, async (req, res) => {
   }
 });
 
+router.delete(
+  "/members/:userId/warnings/:warningId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const access = await requireWorkspaceMemberAccess(req, res);
+      if (!access) return;
+
+      if (!access.permissions.canManageMembers) {
+        return res.status(403).json({
+          ok: false,
+          error: "You do not have permission to delete member warnings",
+        });
+      }
+
+      const userId = normalizeUserId(req.params.userId);
+      const warningId = safeString(req.params.warningId);
+
+      if (!userId || !warningId) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing warning id",
+        });
+      }
+
+      const db = await getDb();
+      const memberDoc = await getMemberDoc(db, userId);
+
+      if (!memberDoc) {
+        return res.status(404).json({
+          ok: false,
+          error: "Member not found",
+        });
+      }
+
+      await db.collection("workspaceMemberProfiles").updateOne(
+        {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId,
+        },
+        {
+          $pull: {
+            warnings: { id: warningId },
+          },
+          $set: {
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      const profile = await buildMemberProfilePayload(db, req, memberDoc);
+
+      return res.json({
+        ok: true,
+        message: "Warning deleted",
+        member: profile,
+      });
+    } catch (error) {
+      console.error("Workspace warning delete error:", error);
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to delete warning",
+      });
+    }
+  }
+);
+
 router.post("/members/:userId/suspensions", requireAuth, async (req, res) => {
   try {
     const access = await requireWorkspaceMemberAccess(req, res);
@@ -500,6 +567,73 @@ router.post("/members/:userId/suspensions", requireAuth, async (req, res) => {
     });
   }
 });
+
+router.delete(
+  "/members/:userId/suspensions/:suspensionId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const access = await requireWorkspaceMemberAccess(req, res);
+      if (!access) return;
+
+      if (!access.permissions.canManageMembers) {
+        return res.status(403).json({
+          ok: false,
+          error: "You do not have permission to delete member suspensions",
+        });
+      }
+
+      const userId = normalizeUserId(req.params.userId);
+      const suspensionId = safeString(req.params.suspensionId);
+
+      if (!userId || !suspensionId) {
+        return res.status(400).json({
+          ok: false,
+          error: "Missing suspension id",
+        });
+      }
+
+      const db = await getDb();
+      const memberDoc = await getMemberDoc(db, userId);
+
+      if (!memberDoc) {
+        return res.status(404).json({
+          ok: false,
+          error: "Member not found",
+        });
+      }
+
+      await db.collection("workspaceMemberProfiles").updateOne(
+        {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId,
+        },
+        {
+          $pull: {
+            suspensions: { id: suspensionId },
+          },
+          $set: {
+            updatedAt: new Date(),
+          },
+        }
+      );
+
+      const profile = await buildMemberProfilePayload(db, req, memberDoc);
+
+      return res.json({
+        ok: true,
+        message: "Suspension deleted",
+        member: profile,
+      });
+    } catch (error) {
+      console.error("Workspace suspension delete error:", error);
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to delete suspension",
+      });
+    }
+  }
+);
 
 router.post("/members/:userId/notes", requireAuth, async (req, res) => {
   try {
@@ -588,25 +722,25 @@ router.post("/members/:userId/notes", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/members/:userId/activity", requireAuth, async (req, res) => {
+router.delete("/members/:userId/notes/:noteId", requireAuth, async (req, res) => {
   try {
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageActivity) {
+    if (!access.permissions.canManageMembers) {
       return res.status(403).json({
         ok: false,
-        error: "You do not have permission to manage member activity",
+        error: "You do not have permission to delete notes",
       });
     }
 
     const userId = normalizeUserId(req.params.userId);
-    const weeklyActivity = normalizeWeeklyActivity(req.body?.weeklyActivity);
+    const noteId = safeString(req.params.noteId);
 
-    if (!userId) {
+    if (!userId || !noteId) {
       return res.status(400).json({
         ok: false,
-        error: "Missing member userId",
+        error: "Missing note id",
       });
     }
 
@@ -626,34 +760,27 @@ router.put("/members/:userId/activity", requireAuth, async (req, res) => {
         userId,
       },
       {
-        $setOnInsert: {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId,
-          warnings: [],
-          suspensions: [],
-          notes: [],
-          createdAt: new Date(),
+        $pull: {
+          notes: { id: noteId },
         },
         $set: {
-          weeklyActivity,
           updatedAt: new Date(),
         },
-      },
-      { upsert: true }
+      }
     );
 
     const profile = await buildMemberProfilePayload(db, req, memberDoc);
 
     return res.json({
       ok: true,
-      message: "Weekly activity updated",
+      message: "Note deleted",
       member: profile,
     });
   } catch (error) {
-    console.error("Workspace activity update error:", error);
+    console.error("Workspace note delete error:", error);
     return res.status(500).json({
       ok: false,
-      error: "Failed to update member activity",
+      error: "Failed to delete note",
     });
   }
 });
@@ -755,127 +882,6 @@ router.get("/activity/overview", requireAuth, async (req, res) => {
     return res.status(500).json({
       ok: false,
       error: "Failed to load activity overview",
-    });
-  }
-});
-
-router.post("/members/refresh", requireAuth, async (req, res) => {
-  try {
-    const access = await buildWorkspaceAccess(req.session.user);
-
-    if (!access.permissions.canRefreshMembers) {
-      return res.status(403).json({
-        ok: false,
-        error: "You do not have permission to refresh members",
-      });
-    }
-
-    const db = await getDb();
-
-    const allMembers = await getAllGroupMembers(WORKSPACE_CONFIG.groupId, 100);
-
-    const userIds = allMembers
-      .map((member) => String(member.user?.userId))
-      .filter(Boolean);
-
-    const avatarMap = await getAvatarHeadshots(userIds);
-
-    const docs = allMembers.map((member) => {
-      const roleName = member.role?.name || "Member";
-      const rank = Number(member.role?.rank || 0);
-
-      const inDirectory =
-        rank >= Number(WORKSPACE_CONFIG.directoryRankMin || 23) &&
-        rank <= Number(WORKSPACE_CONFIG.directoryRankMax || 44);
-
-      return {
-        groupId: WORKSPACE_CONFIG.groupId,
-        userId: String(member.user.userId),
-        username: member.user.username,
-        displayName: member.user.displayName || member.user.username,
-        avatar: avatarMap[String(member.user.userId)] || "",
-        roleId: member.role?.id || null,
-        roleName,
-        roleLabel: roleName,
-        rank,
-        inDirectory,
-        lastSyncedAt: new Date(),
-      };
-    });
-
-    const collection = db.collection("workspaceMembers");
-
-    if (docs.length) {
-      const operations = docs.map((doc) => ({
-        updateOne: {
-          filter: {
-            groupId: doc.groupId,
-            userId: doc.userId,
-          },
-          update: {
-            $set: doc,
-          },
-          upsert: true,
-        },
-      }));
-
-      await collection.bulkWrite(operations);
-
-      const profileOps = docs.map((doc) => ({
-        updateOne: {
-          filter: {
-            groupId: doc.groupId,
-            userId: doc.userId,
-          },
-          update: {
-            $setOnInsert: {
-              groupId: doc.groupId,
-              userId: doc.userId,
-              weeklyActivity: createDefaultWeeklyActivity(),
-              warnings: [],
-              suspensions: [],
-              notes: [],
-              createdAt: new Date(),
-            },
-            $set: {
-              updatedAt: new Date(),
-            },
-          },
-          upsert: true,
-        },
-      }));
-
-      await db.collection("workspaceMemberProfiles").bulkWrite(profileOps);
-    }
-
-    await db.collection("workspaceSettings").updateOne(
-      { groupId: WORKSPACE_CONFIG.groupId },
-      {
-        $set: {
-          groupId: WORKSPACE_CONFIG.groupId,
-          workspaceName: WORKSPACE_CONFIG.name,
-          lastMemberSync: new Date(),
-          directoryRankMin: Number(WORKSPACE_CONFIG.directoryRankMin || 23),
-          directoryRankMax: Number(WORKSPACE_CONFIG.directoryRankMax || 44),
-          refreshRoleBinds: WORKSPACE_CONFIG.refreshRoleBinds || [],
-          weeklyActivityTarget: Number(
-            WORKSPACE_CONFIG.weeklyActivityTarget || 30
-          ),
-        },
-      },
-      { upsert: true }
-    );
-
-    return res.json({
-      ok: true,
-      synced: docs.length,
-      inDirectory: docs.filter((doc) => doc.inDirectory).length,
-    });
-  } catch (error) {
-    console.error("Workspace refresh error:", error);
-    return res.status(500).json({
-      ok: false,
-      error: error.message || "Failed to refresh members",
     });
   }
 });
