@@ -914,101 +914,149 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
 
     const db = await getDb();
 
-    const allMembers = await getAllGroupMembers(WORKSPACE_CONFIG.groupId, 100);
+    const fetchedMembers = await getAllGroupMembers(WORKSPACE_CONFIG.groupId, 100);
 
-    const userIds = allMembers
-      .map((member) => Number(member.userId || member.id))
+    if (!Array.isArray(fetchedMembers) || fetchedMembers.length === 0) {
+      return res.status(500).json({
+        ok: false,
+        error: "Group member fetch returned no valid members",
+      });
+    }
+
+    const normalizedMembers = fetchedMembers
+      .map((member) => {
+        const userId = String(
+          member?.userId ||
+          member?.id ||
+          member?.user?.userId ||
+          member?.user?.id ||
+          ""
+        ).trim();
+
+        const username =
+          member?.username ||
+          member?.name ||
+          member?.user?.username ||
+          member?.user?.name ||
+          "";
+
+        const displayName =
+          member?.displayName ||
+          member?.user?.displayName ||
+          username ||
+          "";
+
+        const roleName =
+          typeof member?.roleName === "string"
+            ? member.roleName
+            : typeof member?.role === "string"
+            ? member.role
+            : typeof member?.role?.name === "string"
+            ? member.role.name
+            : "Member";
+
+        const rank =
+          Number.isFinite(Number(member?.rank))
+            ? Number(member.rank)
+            : Number.isFinite(Number(member?.role?.rank))
+            ? Number(member.role.rank)
+            : 0;
+
+        return {
+          userId,
+          username: String(username || ""),
+          displayName: String(displayName || ""),
+          roleName: String(roleName || "Member"),
+          rank,
+        };
+      })
+      .filter((member) => member.userId);
+
+    if (normalizedMembers.length === 0) {
+      return res.status(500).json({
+        ok: false,
+        error: "No valid member records were parsed from the group response",
+      });
+    }
+
+    const userIds = normalizedMembers
+      .map((member) => Number(member.userId))
       .filter((id) => Number.isFinite(id));
 
     const avatarMap = await getAvatarHeadshots(userIds);
-
     const now = new Date();
 
-    const memberOps = allMembers.map((member) => {
-      const userId = String(member.userId || member.id);
-      const avatar = avatarMap?.[userId] || "";
-      const roleName = normalizeRoleName(member);
-      const rank = normalizeRank(member);
-
-      return {
-        updateOne: {
-          filter: {
+    const memberOps = normalizedMembers.map((member) => ({
+      updateOne: {
+        filter: {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId: member.userId,
+        },
+        update: {
+          $set: {
             groupId: WORKSPACE_CONFIG.groupId,
-            userId,
+            userId: member.userId,
+            username: member.username,
+            displayName: member.displayName,
+            avatar: String(avatarMap?.[member.userId] || ""),
+            roleName: member.roleName,
+            roleLabel: member.roleName,
+            rank: Number(member.rank || 0),
+            inDirectory: true,
+            updatedAt: now,
           },
-          update: {
-            $set: {
-              groupId: WORKSPACE_CONFIG.groupId,
-              userId,
-              username: String(member.username || member.name || ""),
-              displayName: String(
-                member.displayName || member.username || member.name || ""
-              ),
-              avatar: String(avatar || ""),
-              roleName,
-              roleLabel: roleName,
-              rank,
-              inDirectory: true,
-              updatedAt: now,
-            },
-            $setOnInsert: {
-              createdAt: now,
-            },
+          $setOnInsert: {
+            createdAt: now,
           },
-          upsert: true,
         },
-      };
-    });
-
-    if (memberOps.length > 0) {
-      await db.collection("workspaceMembers").bulkWrite(memberOps);
-    }
-
-    await db.collection("workspaceMembers").updateMany(
-      {
-        groupId: WORKSPACE_CONFIG.groupId,
-        userId: {
-          $nin: allMembers.map((member) => String(member.userId || member.id)),
-        },
+        upsert: true,
       },
-      {
-        $set: {
-          inDirectory: false,
-          updatedAt: now,
+    }));
+
+    await db.collection("workspaceMembers").bulkWrite(memberOps);
+
+    const profileOps = normalizedMembers.map((member) => ({
+      updateOne: {
+        filter: {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId: member.userId,
         },
-      }
-    );
-
-    const profileOps = allMembers.map((member) => {
-      const userId = String(member.userId || member.id);
-
-      return {
-        updateOne: {
-          filter: {
+        update: {
+          $setOnInsert: {
             groupId: WORKSPACE_CONFIG.groupId,
-            userId,
+            userId: member.userId,
+            weeklyActivity: createDefaultWeeklyActivity(),
+            warnings: [],
+            suspensions: [],
+            notes: [],
+            createdAt: now,
           },
-          update: {
-            $setOnInsert: {
-              groupId: WORKSPACE_CONFIG.groupId,
-              userId,
-              weeklyActivity: createDefaultWeeklyActivity(),
-              warnings: [],
-              suspensions: [],
-              notes: [],
-              createdAt: now,
-            },
-            $set: {
-              updatedAt: now,
-            },
+          $set: {
+            updatedAt: now,
           },
-          upsert: true,
         },
-      };
-    });
+        upsert: true,
+      },
+    }));
 
-    if (profileOps.length > 0) {
-      await db.collection("workspaceMemberProfiles").bulkWrite(profileOps);
+    await db.collection("workspaceMemberProfiles").bulkWrite(profileOps);
+
+    // safer: only deactivate old members if we fetched a believable result set
+    if (normalizedMembers.length >= 5) {
+      await db.collection("workspaceMembers").updateMany(
+        {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId: {
+            $nin: normalizedMembers.map((member) => member.userId),
+          },
+        },
+        {
+          $set: {
+            inDirectory: false,
+            updatedAt: now,
+          },
+        }
+      );
     }
 
     await db.collection("workspaceSettings").updateOne(
@@ -1031,7 +1079,7 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
     return res.json({
       ok: true,
       message: "Members refreshed successfully",
-      count: allMembers.length,
+      count: normalizedMembers.length,
       lastMemberSync: now,
     });
   } catch (error) {
