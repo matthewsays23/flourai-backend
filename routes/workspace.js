@@ -923,14 +923,17 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
       });
     }
 
+    const minRank = Number(WORKSPACE_CONFIG.directoryRankMin || 1);
+    const maxRank = Number(WORKSPACE_CONFIG.directoryRankMax || 255);
+
     const normalizedMembers = fetchedMembers
       .map((member) => {
         const userId = String(
           member?.userId ||
-          member?.id ||
-          member?.user?.userId ||
-          member?.user?.id ||
-          ""
+            member?.id ||
+            member?.user?.userId ||
+            member?.user?.id ||
+            ""
         ).trim();
 
         const username =
@@ -946,21 +949,8 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
           username ||
           "";
 
-        const roleName =
-          typeof member?.roleName === "string"
-            ? member.roleName
-            : typeof member?.role === "string"
-            ? member.role
-            : typeof member?.role?.name === "string"
-            ? member.role.name
-            : "Member";
-
-        const rank =
-          Number.isFinite(Number(member?.rank))
-            ? Number(member.rank)
-            : Number.isFinite(Number(member?.role?.rank))
-            ? Number(member.role.rank)
-            : 0;
+        const roleName = normalizeRoleName(member);
+        const rank = normalizeRank(member);
 
         return {
           userId,
@@ -970,12 +960,13 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
           rank,
         };
       })
-      .filter((member) => member.userId);
+      .filter((member) => member.userId)
+      .filter((member) => member.rank >= minRank && member.rank <= maxRank);
 
     if (normalizedMembers.length === 0) {
       return res.status(500).json({
         ok: false,
-        error: "No valid member records were parsed from the group response",
+        error: "No valid staff/admin members matched the configured rank range",
       });
     }
 
@@ -1041,23 +1032,20 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
 
     await db.collection("workspaceMemberProfiles").bulkWrite(profileOps);
 
-    // safer: only deactivate old members if we fetched a believable result set
-    if (normalizedMembers.length >= 5) {
-      await db.collection("workspaceMembers").updateMany(
-        {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId: {
-            $nin: normalizedMembers.map((member) => member.userId),
-          },
+    await db.collection("workspaceMembers").updateMany(
+      {
+        groupId: WORKSPACE_CONFIG.groupId,
+        userId: {
+          $nin: normalizedMembers.map((member) => member.userId),
         },
-        {
-          $set: {
-            inDirectory: false,
-            updatedAt: now,
-          },
-        }
-      );
-    }
+      },
+      {
+        $set: {
+          inDirectory: false,
+          updatedAt: now,
+        },
+      }
+    );
 
     await db.collection("workspaceSettings").updateOne(
       {
