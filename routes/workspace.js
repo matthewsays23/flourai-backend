@@ -448,20 +448,32 @@ router.delete(
         });
       }
 
-      await db.collection("workspaceMemberProfiles").updateOne(
-        {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId,
-        },
-        {
-          $pull: {
-            warnings: { id: warningId },
-          },
-          $set: {
-            updatedAt: new Date(),
-          },
-        }
-      );
+     await db.collection("workspaceMemberProfiles").updateOne(
+  {
+    groupId: WORKSPACE_CONFIG.groupId,
+    userId,
+  },
+  {
+    $setOnInsert: {
+      groupId: WORKSPACE_CONFIG.groupId,
+      userId,
+      weeklyActivity: createDefaultWeeklyActivity(),
+      suspensions: [],
+      notes: [],
+      createdAt: new Date(),
+    },
+    $push: {
+      warnings: {
+        $each: [warning],
+        $position: 0,
+      },
+    },
+    $set: {
+      updatedAt: new Date(),
+    },
+  },
+  { upsert: true }
+);
 
       const profile = await buildMemberProfilePayload(db, req, memberDoc);
 
@@ -603,19 +615,31 @@ router.delete(
       }
 
       await db.collection("workspaceMemberProfiles").updateOne(
-        {
-          groupId: WORKSPACE_CONFIG.groupId,
-          userId,
-        },
-        {
-          $pull: {
-            suspensions: { id: suspensionId },
-          },
-          $set: {
-            updatedAt: new Date(),
-          },
-        }
-      );
+  {
+    groupId: WORKSPACE_CONFIG.groupId,
+    userId,
+  },
+  {
+    $setOnInsert: {
+      groupId: WORKSPACE_CONFIG.groupId,
+      userId,
+      weeklyActivity: createDefaultWeeklyActivity(),
+      warnings: [],
+      notes: [],
+      createdAt: new Date(),
+    },
+    $push: {
+      suspensions: {
+        $each: [suspension],
+        $position: 0,
+      },
+    },
+    $set: {
+      updatedAt: new Date(),
+    },
+  },
+  { upsert: true }
+);
 
       const profile = await buildMemberProfilePayload(db, req, memberDoc);
 
