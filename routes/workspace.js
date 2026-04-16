@@ -62,6 +62,38 @@ function makeId(prefix = "item") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
+function normalizeRoleName(member) {
+  if (typeof member?.roleName === "string" && member.roleName.trim()) {
+    return member.roleName.trim();
+  }
+
+  if (typeof member?.role === "string" && member.role.trim()) {
+    return member.role.trim();
+  }
+
+  if (member?.role && typeof member.role === "object") {
+    if (typeof member.role.name === "string" && member.role.name.trim()) {
+      return member.role.name.trim();
+    }
+  }
+
+  return "Member";
+}
+
+function normalizeRank(member) {
+  if (Number.isFinite(Number(member?.rank))) {
+    return Number(member.rank);
+  }
+
+  if (member?.role && typeof member.role === "object") {
+    if (Number.isFinite(Number(member.role.rank))) {
+      return Number(member.role.rank);
+    }
+  }
+
+  return 0;
+}
+
 async function buildWorkspaceAccess(user) {
   const viewerRole = await getUserGroupRole(
     user.robloxId,
@@ -113,9 +145,9 @@ async function buildWorkspaceAccess(user) {
     },
     viewer: {
       inGroup: true,
-      roleName: viewerRole.roleName,
-      roleLabel: viewerRole.roleName,
-      rank: viewerRole.rank,
+      roleName: String(viewerRole.roleName || "Member"),
+      roleLabel: String(viewerRole.roleName || "Member"),
+      rank: Number(viewerRole.rank || 0),
     },
     permissions: {
       canViewMembers,
@@ -185,11 +217,11 @@ async function buildMemberProfilePayload(db, req, memberDoc) {
 
   return {
     userId: String(memberDoc.userId),
-    username: memberDoc.username,
-    displayName: memberDoc.displayName,
-    avatar: memberDoc.avatar || "",
-    roleName: memberDoc.roleName,
-    roleLabel: memberDoc.roleLabel || memberDoc.roleName,
+    username: String(memberDoc.username || ""),
+    displayName: String(memberDoc.displayName || ""),
+    avatar: String(memberDoc.avatar || ""),
+    roleName: String(memberDoc.roleName || "Member"),
+    roleLabel: String(memberDoc.roleLabel || memberDoc.roleName || "Member"),
     rank: Number(memberDoc.rank || 0),
     isConnectedUser:
       String(memberDoc.userId) === String(req.session.user.robloxId),
@@ -259,12 +291,12 @@ router.get("/members", requireAuth, async (req, res) => {
 
       return {
         userId: String(member.userId),
-        username: member.username,
-        displayName: member.displayName,
-        avatar: member.avatar || "",
-        roleName: member.roleName,
-        roleLabel: member.roleLabel || member.roleName,
-        rank: member.rank,
+        username: String(member.username || ""),
+        displayName: String(member.displayName || ""),
+        avatar: String(member.avatar || ""),
+        roleName: String(member.roleName || "Member"),
+        roleLabel: String(member.roleLabel || member.roleName || "Member"),
+        rank: Number(member.rank || 0),
         isConnectedUser:
           String(member.userId) === String(req.session.user.robloxId),
         weeklyActivity,
@@ -805,11 +837,11 @@ router.get("/activity/overview", requireAuth, async (req, res) => {
 
       return {
         userId: String(member.userId),
-        username: member.username,
-        displayName: member.displayName,
-        avatar: member.avatar || "",
-        roleName: member.roleName,
-        roleLabel: member.roleLabel || member.roleName,
+        username: String(member.username || ""),
+        displayName: String(member.displayName || ""),
+        avatar: String(member.avatar || ""),
+        roleName: String(member.roleName || "Member"),
+        roleLabel: String(member.roleLabel || member.roleName || "Member"),
         rank: Number(member.rank || 0),
         weeklyActivity,
         weeklyTotalMinutes: totalWeeklyMinutes(weeklyActivity),
@@ -895,6 +927,8 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
     const memberOps = allMembers.map((member) => {
       const userId = String(member.userId || member.id);
       const avatar = avatarMap?.[userId] || "";
+      const roleName = normalizeRoleName(member);
+      const rank = normalizeRank(member);
 
       return {
         updateOne: {
@@ -906,13 +940,14 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
             $set: {
               groupId: WORKSPACE_CONFIG.groupId,
               userId,
-              username: member.username || member.name || "",
-              displayName:
-                member.displayName || member.username || member.name || "",
-              avatar,
-              roleName: member.roleName || member.role || "Member",
-              roleLabel: member.roleName || member.role || "Member",
-              rank: Number(member.rank || 0),
+              username: String(member.username || member.name || ""),
+              displayName: String(
+                member.displayName || member.username || member.name || ""
+              ),
+              avatar: String(avatar || ""),
+              roleName,
+              roleLabel: roleName,
+              rank,
               inDirectory: true,
               updatedAt: now,
             },
