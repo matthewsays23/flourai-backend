@@ -1251,6 +1251,22 @@ router.delete("/members/:userId/notes/:noteId", requireAuth, async (req, res) =>
   }
 });
 
+router.get("/activity/roblox", (req, res) => {
+  return res.json({
+    ok: true,
+    message: "Flourai Roblox activity intake is online. Send activity with POST.",
+    method: "POST",
+    requiredHeaders: ["Content-Type: application/json", "x-flourai-activity-secret"],
+    exampleBody: {
+      userId: 123456789,
+      username: "RobloxUsername",
+      displayName: "Display Name",
+      minutes: 15,
+      source: "roblox-server",
+    },
+  });
+});
+
 router.post("/activity/roblox", async (req, res) => {
   try {
     const configuredSecret = getActivitySecret();
