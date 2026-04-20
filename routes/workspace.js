@@ -94,6 +94,166 @@ function normalizeRank(member) {
   return 0;
 }
 
+function getDefaultDepartments() {
+  return {
+    staffing: {
+      key: "staffing",
+      label: "Staffing Department",
+      permissions: {
+        canWarn: true,
+        canSuspend: true,
+        canAddNotes: true,
+        canViewActivity: true,
+        canManageWebsite: false,
+      },
+      members: [],
+    },
+    communications: {
+      key: "communications",
+      label: "Communications",
+      permissions: {
+        canWarn: false,
+        canSuspend: false,
+        canAddNotes: false,
+        canViewActivity: true,
+        canManageWebsite: false,
+      },
+      members: [],
+    },
+  };
+}
+
+function normalizeDepartmentCollection(input) {
+  const defaults = getDefaultDepartments();
+  const provided = input && typeof input === "object" ? input : {};
+
+  const normalized = {};
+
+  for (const [key, fallbackDepartment] of Object.entries(defaults)) {
+    const source = provided[key] || {};
+
+    normalized[key] = {
+      key,
+      label: safeString(source.label, fallbackDepartment.label),
+      permissions: {
+        canWarn:
+          typeof source?.permissions?.canWarn === "boolean"
+            ? source.permissions.canWarn
+            : fallbackDepartment.permissions.canWarn,
+        canSuspend:
+          typeof source?.permissions?.canSuspend === "boolean"
+            ? source.permissions.canSuspend
+            : fallbackDepartment.permissions.canSuspend,
+        canAddNotes:
+          typeof source?.permissions?.canAddNotes === "boolean"
+            ? source.permissions.canAddNotes
+            : fallbackDepartment.permissions.canAddNotes,
+        canViewActivity:
+          typeof source?.permissions?.canViewActivity === "boolean"
+            ? source.permissions.canViewActivity
+            : fallbackDepartment.permissions.canViewActivity,
+        canManageWebsite:
+          typeof source?.permissions?.canManageWebsite === "boolean"
+            ? source.permissions.canManageWebsite
+            : fallbackDepartment.permissions.canManageWebsite,
+      },
+      members: Array.isArray(source.members)
+        ? [...new Set(source.members.map((id) => String(id).trim()).filter(Boolean))]
+        : [],
+    };
+  }
+
+  return normalized;
+}
+
+function getDepartmentAccessForUser(userId, departments) {
+  const normalizedUserId = String(userId || "").trim();
+  const collection = normalizeDepartmentCollection(departments);
+
+  for (const department of Object.values(collection)) {
+    if (department.members.includes(normalizedUserId)) {
+      return {
+        departmentKey: department.key,
+        departmentLabel: department.label,
+        permissions: { ...department.permissions },
+      };
+    }
+  }
+
+  return {
+    departmentKey: null,
+    departmentLabel: "No Department",
+    permissions: {
+      canWarn: false,
+      canSuspend: false,
+      canAddNotes: false,
+      canViewActivity: false,
+      canManageWebsite: false,
+    },
+  };
+}
+
+function formatDepartmentsForClient(departments, members = []) {
+  const memberMap = new Map(
+    members.map((member) => [
+      String(member.userId),
+      {
+        userId: String(member.userId),
+        username: String(member.username || ""),
+        displayName: String(member.displayName || ""),
+        roleName: String(member.roleName || "Member"),
+        roleLabel: String(member.roleLabel || member.roleName || "Member"),
+        avatar: String(member.avatar || ""),
+      },
+    ])
+  );
+
+  const normalized = normalizeDepartmentCollection(departments);
+
+  const output = {};
+
+  for (const [key, department] of Object.entries(normalized)) {
+    output[key] = {
+      key,
+      label: department.label,
+      permissions: department.permissions,
+      members: department.members.map((userId) => {
+        const linked = memberMap.get(String(userId));
+        return (
+          linked || {
+            userId: String(userId),
+            username: "",
+            displayName: `User ${userId}`,
+            roleName: "Member",
+            roleLabel: "Member",
+            avatar: "",
+          }
+        );
+      }),
+    };
+  }
+
+  return output;
+}
+
+async function getWorkspaceSettings(db) {
+  const existing = await db.collection("workspaceSettings").findOne({
+    groupId: WORKSPACE_CONFIG.groupId,
+  });
+
+  const normalizedDepartments = normalizeDepartmentCollection(
+    existing?.departments
+  );
+
+  return {
+    groupId: WORKSPACE_CONFIG.groupId,
+    lastMemberSync: existing?.lastMemberSync || null,
+    departments: normalizedDepartments,
+    createdAt: existing?.createdAt || null,
+    updatedAt: existing?.updatedAt || null,
+  };
+}
+
 async function buildWorkspaceAccess(user) {
   const viewerRole = await getUserGroupRole(
     user.robloxId,
@@ -106,26 +266,31 @@ async function buildWorkspaceAccess(user) {
         groupId: WORKSPACE_CONFIG.groupId,
         name: WORKSPACE_CONFIG.name,
         lastMemberSync: null,
+        departments: normalizeDepartmentCollection(),
       },
       viewer: {
         inGroup: false,
         roleName: null,
         roleLabel: "Not In Group",
         rank: null,
+        departmentKey: null,
+        departmentLabel: null,
       },
       permissions: {
         canViewMembers: false,
         canRefreshMembers: false,
-        canManageMembers: false,
-        canManageActivity: false,
+        canWarn: false,
+        canSuspend: false,
+        canAddNotes: false,
+        canViewActivity: false,
+        canManageWebsite: false,
+        canManageSettings: false,
       },
     };
   }
 
   const db = await getDb();
-  const settings = await db.collection("workspaceSettings").findOne({
-    groupId: WORKSPACE_CONFIG.groupId,
-  });
+  const settings = await getWorkspaceSettings(db);
 
   const canViewMembers = true;
 
@@ -134,26 +299,37 @@ async function buildWorkspaceAccess(user) {
     WORKSPACE_CONFIG.refreshRoleBinds || []
   );
 
-  const canManageMembers = canRefreshMembers;
-  const canManageActivity = false;
+  const departmentAccess = getDepartmentAccessForUser(
+    user.robloxId,
+    settings.departments
+  );
+
+  const canManageSettings = canRefreshMembers;
 
   return {
     workspace: {
       groupId: WORKSPACE_CONFIG.groupId,
       name: WORKSPACE_CONFIG.name,
-      lastMemberSync: settings?.lastMemberSync || null,
+      lastMemberSync: settings.lastMemberSync,
+      departments: settings.departments,
     },
     viewer: {
       inGroup: true,
       roleName: String(viewerRole.roleName || "Member"),
       roleLabel: String(viewerRole.roleName || "Member"),
       rank: Number(viewerRole.rank || 0),
+      departmentKey: departmentAccess.departmentKey,
+      departmentLabel: departmentAccess.departmentLabel,
     },
     permissions: {
       canViewMembers,
       canRefreshMembers,
-      canManageMembers,
-      canManageActivity,
+      canWarn: !!departmentAccess.permissions.canWarn,
+      canSuspend: !!departmentAccess.permissions.canSuspend,
+      canAddNotes: !!departmentAccess.permissions.canAddNotes,
+      canViewActivity: !!departmentAccess.permissions.canViewActivity,
+      canManageWebsite: !!departmentAccess.permissions.canManageWebsite,
+      canManageSettings,
     },
   };
 }
@@ -177,6 +353,17 @@ async function getMemberDoc(db, userId) {
     groupId: WORKSPACE_CONFIG.groupId,
     userId: normalizeUserId(userId),
   });
+}
+
+async function getAllDirectoryMembers(db) {
+  return db
+    .collection("workspaceMembers")
+    .find({
+      groupId: WORKSPACE_CONFIG.groupId,
+      inDirectory: true,
+    })
+    .sort({ rank: -1, displayName: 1 })
+    .toArray();
 }
 
 async function getOrCreateMemberProfile(db, memberDoc) {
@@ -237,10 +424,17 @@ async function buildMemberProfilePayload(db, req, memberDoc) {
 router.get("/access", requireAuth, async (req, res) => {
   try {
     const access = await buildWorkspaceAccess(req.session.user);
+    const db = await getDb();
+    const members = await getAllDirectoryMembers(db);
 
     return res.json({
       ok: true,
-      ...access,
+      workspace: {
+        ...access.workspace,
+        departments: formatDepartmentsForClient(access.workspace.departments, members),
+      },
+      viewer: access.viewer,
+      permissions: access.permissions,
     });
   } catch (error) {
     console.error("Workspace access error:", error);
@@ -250,6 +444,184 @@ router.get("/access", requireAuth, async (req, res) => {
     });
   }
 });
+
+router.get("/settings", requireAuth, async (req, res) => {
+  try {
+    const access = await requireWorkspaceMemberAccess(req, res);
+    if (!access) return;
+
+    const db = await getDb();
+    const settings = await getWorkspaceSettings(db);
+    const members = await getAllDirectoryMembers(db);
+
+    return res.json({
+      ok: true,
+      settings: {
+        groupId: settings.groupId,
+        lastMemberSync: settings.lastMemberSync,
+        departments: formatDepartmentsForClient(settings.departments, members),
+      },
+      permissions: access.permissions,
+    });
+  } catch (error) {
+    console.error("Workspace settings load error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to load workspace settings",
+    });
+  }
+});
+
+router.post("/settings/departments/:departmentKey/members", requireAuth, async (req, res) => {
+  try {
+    const access = await requireWorkspaceMemberAccess(req, res);
+    if (!access) return;
+
+    if (!access.permissions.canManageSettings) {
+      return res.status(403).json({
+        ok: false,
+        error: "You do not have permission to manage workspace settings",
+      });
+    }
+
+    const departmentKey = safeString(req.params.departmentKey).toLowerCase();
+    const userId = normalizeUserId(req.body?.userId);
+
+    if (!departmentKey || !userId) {
+      return res.status(400).json({
+        ok: false,
+        error: "Department key and userId are required",
+      });
+    }
+
+    const db = await getDb();
+    const settings = await getWorkspaceSettings(db);
+    const departments = normalizeDepartmentCollection(settings.departments);
+
+    if (!departments[departmentKey]) {
+      return res.status(404).json({
+        ok: false,
+        error: "Department not found",
+      });
+    }
+
+    const memberDoc = await getMemberDoc(db, userId);
+    if (!memberDoc) {
+      return res.status(404).json({
+        ok: false,
+        error: "Member not found",
+      });
+    }
+
+    for (const key of Object.keys(departments)) {
+      departments[key].members = departments[key].members.filter(
+        (id) => String(id) !== userId
+      );
+    }
+
+    departments[departmentKey].members = [
+      ...new Set([...departments[departmentKey].members, userId]),
+    ];
+
+    const now = new Date();
+
+    await db.collection("workspaceSettings").updateOne(
+      { groupId: WORKSPACE_CONFIG.groupId },
+      {
+        $set: {
+          departments,
+          updatedAt: now,
+        },
+        $setOnInsert: {
+          groupId: WORKSPACE_CONFIG.groupId,
+          createdAt: now,
+        },
+      },
+      { upsert: true }
+    );
+
+    const members = await getAllDirectoryMembers(db);
+
+    return res.json({
+      ok: true,
+      message: "Member assigned to department",
+      departments: formatDepartmentsForClient(departments, members),
+    });
+  } catch (error) {
+    console.error("Assign department member error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to assign member to department",
+    });
+  }
+});
+
+router.delete(
+  "/settings/departments/:departmentKey/members/:userId",
+  requireAuth,
+  async (req, res) => {
+    try {
+      const access = await requireWorkspaceMemberAccess(req, res);
+      if (!access) return;
+
+      if (!access.permissions.canManageSettings) {
+        return res.status(403).json({
+          ok: false,
+          error: "You do not have permission to manage workspace settings",
+        });
+      }
+
+      const departmentKey = safeString(req.params.departmentKey).toLowerCase();
+      const userId = normalizeUserId(req.params.userId);
+
+      const db = await getDb();
+      const settings = await getWorkspaceSettings(db);
+      const departments = normalizeDepartmentCollection(settings.departments);
+
+      if (!departments[departmentKey]) {
+        return res.status(404).json({
+          ok: false,
+          error: "Department not found",
+        });
+      }
+
+      departments[departmentKey].members = departments[departmentKey].members.filter(
+        (id) => String(id) !== userId
+      );
+
+      const now = new Date();
+
+      await db.collection("workspaceSettings").updateOne(
+        { groupId: WORKSPACE_CONFIG.groupId },
+        {
+          $set: {
+            departments,
+            updatedAt: now,
+          },
+          $setOnInsert: {
+            groupId: WORKSPACE_CONFIG.groupId,
+            createdAt: now,
+          },
+        },
+        { upsert: true }
+      );
+
+      const members = await getAllDirectoryMembers(db);
+
+      return res.json({
+        ok: true,
+        message: "Member removed from department",
+        departments: formatDepartmentsForClient(departments, members),
+      });
+    } catch (error) {
+      console.error("Remove department member error:", error);
+      return res.status(500).json({
+        ok: false,
+        error: "Failed to remove member from department",
+      });
+    }
+  }
+);
 
 router.get("/members", requireAuth, async (req, res) => {
   try {
@@ -275,19 +647,33 @@ router.get("/members", requireAuth, async (req, res) => {
       })
       .toArray();
 
+    const settings = await getWorkspaceSettings(db);
+    const departmentCollection = normalizeDepartmentCollection(settings.departments);
+
+    const userDepartmentMap = new Map();
+
+    for (const [key, department] of Object.entries(departmentCollection)) {
+      for (const userId of department.members) {
+        userDepartmentMap.set(String(userId), {
+          departmentKey: key,
+          departmentLabel: department.label,
+        });
+      }
+    }
+
     const profileMap = new Map(
       profiles.map((profile) => [String(profile.userId), profile])
     );
 
     const normalized = members.map((member) => {
       const profile = profileMap.get(String(member.userId));
-
       const weeklyActivity = normalizeWeeklyActivity(profile?.weeklyActivity);
       const warnings = Array.isArray(profile?.warnings) ? profile.warnings : [];
       const suspensions = Array.isArray(profile?.suspensions)
         ? profile.suspensions
         : [];
       const notes = Array.isArray(profile?.notes) ? profile.notes : [];
+      const department = userDepartmentMap.get(String(member.userId)) || null;
 
       return {
         userId: String(member.userId),
@@ -304,6 +690,8 @@ router.get("/members", requireAuth, async (req, res) => {
         warningCount: warnings.length,
         suspensionCount: suspensions.length,
         noteCount: notes.length,
+        departmentKey: department?.departmentKey || null,
+        departmentLabel: department?.departmentLabel || null,
       };
     });
 
@@ -364,7 +752,7 @@ router.post("/members/:userId/warnings", requireAuth, async (req, res) => {
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canWarn) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to manage member warnings",
@@ -448,7 +836,7 @@ router.delete("/members/:userId/warnings/:warningId", requireAuth, async (req, r
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canWarn) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to delete member warnings",
@@ -511,7 +899,7 @@ router.post("/members/:userId/suspensions", requireAuth, async (req, res) => {
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canSuspend) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to manage suspensions",
@@ -595,7 +983,7 @@ router.delete("/members/:userId/suspensions/:suspensionId", requireAuth, async (
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canSuspend) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to delete member suspensions",
@@ -658,7 +1046,7 @@ router.post("/members/:userId/notes", requireAuth, async (req, res) => {
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canAddNotes) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to manage notes",
@@ -742,7 +1130,7 @@ router.delete("/members/:userId/notes/:noteId", requireAuth, async (req, res) =>
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
 
-    if (!access.permissions.canManageMembers) {
+    if (!access.permissions.canAddNotes) {
       return res.status(403).json({
         ok: false,
         error: "You do not have permission to delete notes",
@@ -804,6 +1192,13 @@ router.get("/activity/overview", requireAuth, async (req, res) => {
   try {
     const access = await requireWorkspaceMemberAccess(req, res);
     if (!access) return;
+
+    if (!access.permissions.canViewActivity) {
+      return res.status(403).json({
+        ok: false,
+        error: "You do not have permission to view activity",
+      });
+    }
 
     const db = await getDb();
 
@@ -1047,6 +1442,8 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
       }
     );
 
+    const existingSettings = await getWorkspaceSettings(db);
+
     await db.collection("workspaceSettings").updateOne(
       {
         groupId: WORKSPACE_CONFIG.groupId,
@@ -1054,6 +1451,7 @@ router.post("/members/refresh", requireAuth, async (req, res) => {
       {
         $set: {
           lastMemberSync: now,
+          departments: existingSettings.departments,
           updatedAt: now,
         },
         $setOnInsert: {
