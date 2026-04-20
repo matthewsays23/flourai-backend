@@ -6,6 +6,7 @@ const WORKSPACE_CONFIG = {
 
   directoryRankMin: 13,
   directoryRankMax: 255,
+  weeklyActivityTarget: Number(process.env.FLOURAI_WEEKLY_ACTIVITY_TARGET || "30"),
 
   refreshRoleBinds: ["Owner", "Leadership", "Management"],
 };

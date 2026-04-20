@@ -58,6 +58,69 @@ function totalWeeklyMinutes(weeklyActivity = []) {
   return weeklyActivity.reduce((sum, day) => sum + Number(day.minutes || 0), 0);
 }
 
+function getActivitySecret() {
+  return (
+    process.env.FLOURAI_ACTIVITY_SECRET ||
+    process.env.ROBLOX_ACTIVITY_SECRET ||
+    ""
+  );
+}
+
+function getProvidedActivitySecret(req) {
+  return (
+    req.get("x-flourai-activity-secret") ||
+    req.get("x-roblox-activity-secret") ||
+    req.body?.secret ||
+    ""
+  );
+}
+
+function parseActivityDate(value) {
+  const date = value ? new Date(value) : new Date();
+  return Number.isNaN(date.getTime()) ? new Date() : date;
+}
+
+function getActivityWeekKey(date = new Date()) {
+  const copy = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const day = copy.getUTCDay() || 7;
+  copy.setUTCDate(copy.getUTCDate() - day + 1);
+  return copy.toISOString().slice(0, 10);
+}
+
+function getActivityDayLabel(date = new Date()) {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][date.getUTCDay()];
+}
+
+function normalizeActivityMinutes(value) {
+  const minutes = Math.round(Number(value || 0));
+  if (!Number.isFinite(minutes)) return 0;
+  return Math.min(Math.max(minutes, 0), 1440);
+}
+
+function addMinutesToWeeklyActivity(weeklyActivity, label, minutes) {
+  return normalizeWeeklyActivity(weeklyActivity).map((day) => {
+    if (day.label !== label) return day;
+
+    return {
+      ...day,
+      minutes: Number(day.minutes || 0) + minutes,
+    };
+  });
+}
+
+function getVisibleWeeklyActivity(profile, date = new Date()) {
+  if (!profile) return createDefaultWeeklyActivity();
+
+  if (
+    profile.activityWeekKey &&
+    profile.activityWeekKey !== getActivityWeekKey(date)
+  ) {
+    return createDefaultWeeklyActivity();
+  }
+
+  return normalizeWeeklyActivity(profile.weeklyActivity);
+}
+
 function makeId(prefix = "item") {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -380,7 +443,7 @@ async function getOrCreateMemberProfile(db, memberDoc) {
       warnings: Array.isArray(existing.warnings) ? existing.warnings : [],
       suspensions: Array.isArray(existing.suspensions) ? existing.suspensions : [],
       notes: Array.isArray(existing.notes) ? existing.notes : [],
-      weeklyActivity: normalizeWeeklyActivity(existing.weeklyActivity),
+      weeklyActivity: getVisibleWeeklyActivity(existing),
     };
   }
 
@@ -412,8 +475,8 @@ async function buildMemberProfilePayload(db, req, memberDoc) {
     rank: Number(memberDoc.rank || 0),
     isConnectedUser:
       String(memberDoc.userId) === String(req.session.user.robloxId),
-    weeklyActivity: normalizeWeeklyActivity(profile.weeklyActivity),
-    weeklyTotalMinutes: totalWeeklyMinutes(profile.weeklyActivity),
+    weeklyActivity: getVisibleWeeklyActivity(profile),
+    weeklyTotalMinutes: totalWeeklyMinutes(getVisibleWeeklyActivity(profile)),
     warnings: Array.isArray(profile.warnings) ? profile.warnings : [],
     suspensions: Array.isArray(profile.suspensions) ? profile.suspensions : [],
     notes: Array.isArray(profile.notes) ? profile.notes : [],
@@ -667,7 +730,7 @@ router.get("/members", requireAuth, async (req, res) => {
 
     const normalized = members.map((member) => {
       const profile = profileMap.get(String(member.userId));
-      const weeklyActivity = normalizeWeeklyActivity(profile?.weeklyActivity);
+      const weeklyActivity = getVisibleWeeklyActivity(profile);
       const warnings = Array.isArray(profile?.warnings) ? profile.warnings : [];
       const suspensions = Array.isArray(profile?.suspensions)
         ? profile.suspensions
@@ -1188,6 +1251,187 @@ router.delete("/members/:userId/notes/:noteId", requireAuth, async (req, res) =>
   }
 });
 
+router.post("/activity/roblox", async (req, res) => {
+  try {
+    const configuredSecret = getActivitySecret();
+    const providedSecret = getProvidedActivitySecret(req);
+
+    if (!configuredSecret) {
+      return res.status(503).json({
+        ok: false,
+        error: "Activity intake is not configured",
+      });
+    }
+
+    if (!providedSecret || providedSecret !== configuredSecret) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid activity secret",
+      });
+    }
+
+    const rawEvents = Array.isArray(req.body?.events)
+      ? req.body.events
+      : [req.body];
+
+    const events = rawEvents
+      .map((event) => {
+        const userId = normalizeUserId(
+          event?.userId || event?.robloxId || event?.playerUserId
+        );
+        const minutes = normalizeActivityMinutes(
+          event?.minutes || event?.durationMinutes || event?.activeMinutes
+        );
+        const occurredAt = parseActivityDate(
+          event?.occurredAt || event?.endedAt || event?.timestamp
+        );
+
+        return {
+          userId,
+          minutes,
+          occurredAt,
+          weekKey: getActivityWeekKey(occurredAt),
+          dayLabel: getActivityDayLabel(occurredAt),
+          username: safeString(event?.username),
+          displayName: safeString(event?.displayName || event?.username),
+          placeId: safeString(event?.placeId),
+          jobId: safeString(event?.jobId || event?.serverId),
+          source: safeString(event?.source, "roblox"),
+        };
+      })
+      .filter((event) => event.userId && event.minutes > 0);
+
+    if (!events.length) {
+      return res.status(400).json({
+        ok: false,
+        error: "At least one activity event with userId and minutes is required",
+      });
+    }
+
+    const db = await getDb();
+    const now = new Date();
+    const results = [];
+
+    for (const event of events) {
+      const memberDoc = await getMemberDoc(db, event.userId);
+
+      if (!memberDoc && !event.username && !event.displayName) {
+        results.push({
+          userId: event.userId,
+          ok: false,
+          error: "Member is not synced yet",
+        });
+        continue;
+      }
+
+      if (!memberDoc) {
+        await db.collection("workspaceMembers").updateOne(
+          {
+            groupId: WORKSPACE_CONFIG.groupId,
+            userId: event.userId,
+          },
+          {
+            $set: {
+              groupId: WORKSPACE_CONFIG.groupId,
+              userId: event.userId,
+              username: event.username || event.displayName,
+              displayName: event.displayName || event.username,
+              roleName: "Member",
+              roleLabel: "Member",
+              rank: 0,
+              inDirectory: true,
+              updatedAt: now,
+            },
+            $setOnInsert: {
+              createdAt: now,
+            },
+          },
+          { upsert: true }
+        );
+      }
+
+      const profile = await db.collection("workspaceMemberProfiles").findOne({
+        groupId: WORKSPACE_CONFIG.groupId,
+        userId: event.userId,
+      });
+
+      const baseWeeklyActivity =
+        profile?.activityWeekKey === event.weekKey
+          ? profile.weeklyActivity
+          : createDefaultWeeklyActivity();
+
+      const weeklyActivity = addMinutesToWeeklyActivity(
+        baseWeeklyActivity,
+        event.dayLabel,
+        event.minutes
+      );
+
+      const activityRecord = {
+        id: makeId("activity"),
+        groupId: WORKSPACE_CONFIG.groupId,
+        userId: event.userId,
+        minutes: event.minutes,
+        dayLabel: event.dayLabel,
+        weekKey: event.weekKey,
+        occurredAt: event.occurredAt,
+        placeId: event.placeId,
+        jobId: event.jobId,
+        source: event.source,
+        createdAt: now,
+      };
+
+      await db.collection("workspaceActivityEvents").insertOne(activityRecord);
+
+      await db.collection("workspaceMemberProfiles").updateOne(
+        {
+          groupId: WORKSPACE_CONFIG.groupId,
+          userId: event.userId,
+        },
+        {
+          $setOnInsert: {
+            groupId: WORKSPACE_CONFIG.groupId,
+            userId: event.userId,
+            warnings: [],
+            suspensions: [],
+            notes: [],
+            createdAt: now,
+          },
+          $set: {
+            weeklyActivity,
+            activityWeekKey: event.weekKey,
+            lastActivityAt: event.occurredAt,
+            updatedAt: now,
+          },
+        },
+        { upsert: true }
+      );
+
+      results.push({
+        userId: event.userId,
+        ok: true,
+        minutes: event.minutes,
+        dayLabel: event.dayLabel,
+        weekKey: event.weekKey,
+      });
+    }
+
+    const accepted = results.filter((result) => result.ok).length;
+
+    return res.json({
+      ok: true,
+      accepted,
+      rejected: results.length - accepted,
+      results,
+    });
+  } catch (error) {
+    console.error("Roblox activity intake error:", error);
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to record Roblox activity",
+    });
+  }
+});
+
 router.get("/activity/overview", requireAuth, async (req, res) => {
   try {
     const access = await requireWorkspaceMemberAccess(req, res);
@@ -1228,7 +1472,7 @@ router.get("/activity/overview", requireAuth, async (req, res) => {
 
     const normalizedMembers = members.map((member) => {
       const profile = profileMap.get(String(member.userId));
-      const weeklyActivity = normalizeWeeklyActivity(profile?.weeklyActivity);
+      const weeklyActivity = getVisibleWeeklyActivity(profile);
 
       return {
         userId: String(member.userId),
