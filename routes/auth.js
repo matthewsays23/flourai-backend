@@ -10,6 +10,12 @@ const router = express.Router();
 
 const isProduction = process.env.NODE_ENV === "production";
 
+function sanitizeNextPath(next) {
+  if (typeof next !== "string") return "";
+  if (!next.startsWith("/") || next.startsWith("//")) return "";
+  return next;
+}
+
 router.get("/roblox/start", async (req, res) => {
   try {
     req.session.regenerate((regenErr) => {
@@ -24,6 +30,7 @@ router.get("/roblox/start", async (req, res) => {
 
       req.session.oauth_state = state;
       req.session.code_verifier = codeVerifier;
+      req.session.next_after_roblox = sanitizeNextPath(req.query.next);
 
       req.session.save((saveErr) => {
         if (saveErr) {
@@ -137,7 +144,10 @@ router.get("/roblox/callback", async (req, res) => {
 
       console.log("User logged in successfully:", req.session.user);
 
-      return res.redirect(`${process.env.FRONTEND_URL}/auth/success`);
+      const nextPath = sanitizeNextPath(req.session.next_after_roblox);
+      delete req.session.next_after_roblox;
+
+      return res.redirect(`${process.env.FRONTEND_URL}${nextPath || "/auth/success"}`);
     });
   } catch (error) {
     console.error("Roblox callback error:", error.response?.data || error.message);

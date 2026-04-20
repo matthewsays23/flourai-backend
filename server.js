@@ -8,6 +8,7 @@ const MongoStore = require("connect-mongo");
 
 const authRoutes = require("./routes/auth");
 const workspaceRoutes = require("./routes/workspace");
+const verificationRoutes = require("./routes/verification");
 
 const app = express();
 
@@ -68,6 +69,7 @@ app.get("/", (req, res) => {
 
 app.use("/api/auth", authRoutes);
 app.use("/api/workspace", workspaceRoutes);
+app.use("/api/verification", verificationRoutes);
 
 app.use((err, req, res, next) => {
   console.error("Unhandled server error:", err);
