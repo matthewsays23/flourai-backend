@@ -9,6 +9,7 @@ const {
   exchangeDiscordCode,
   getDiscordUser,
   getDesiredRoleIds,
+  isAutoRoleBindEnabled,
   parseRoleBinds,
 } = require("../utils/discordVerification");
 const { createState } = require("../utils/pkce");
@@ -25,6 +26,16 @@ function getDiscordRedirectUri() {
 
 function getDiscordScopes() {
   return process.env.DISCORD_OAUTH_SCOPES || "identify guilds.join";
+}
+
+function getMissingDiscordConfig() {
+  return [
+    "DISCORD_CLIENT_ID",
+    "DISCORD_CLIENT_SECRET",
+    "DISCORD_REDIRECT_URI",
+    "DISCORD_BOT_TOKEN",
+    "DISCORD_GUILD_ID",
+  ].filter((key) => !process.env[key]);
 }
 
 function buildVerifyRedirect(params = {}) {
@@ -72,7 +83,8 @@ router.get("/status", async (req, res) => {
         : null,
       bind,
       robloxRole,
-      desiredRoleIds: getDesiredRoleIds(robloxRole),
+      desiredRoleIds: await getDesiredRoleIds(robloxRole),
+      autoRoleBinds: isAutoRoleBindEnabled(),
       roleBinds: parseRoleBinds(),
     });
   } catch (error) {
@@ -86,9 +98,10 @@ router.get("/status", async (req, res) => {
 
 router.get("/discord/start", requireAuth, (req, res) => {
   const redirectUri = getDiscordRedirectUri();
+  const missing = getMissingDiscordConfig();
 
-  if (!process.env.DISCORD_CLIENT_ID || !redirectUri) {
-    return res.status(500).send("Discord OAuth is not configured.");
+  if (missing.length) {
+    return res.status(500).send(`Discord OAuth is missing: ${missing.join(", ")}`);
   }
 
   const state = createState();

@@ -1,6 +1,11 @@
 const axios = require("axios");
+const { getGroupRoles } = require("./robloxGroup");
 
 const DISCORD_API = "https://discord.com/api/v10";
+const roleCache = {
+  expiresAt: 0,
+  roles: [],
+};
 
 function getBotToken() {
   return process.env.DISCORD_BOT_TOKEN || process.env.DISCORD_TOKEN || "";
@@ -39,6 +44,14 @@ function normalize(value) {
   return String(value || "").trim().toLowerCase();
 }
 
+function isAutoRoleBindEnabled() {
+  return process.env.DISCORD_AUTO_ROLE_BINDS !== "false";
+}
+
+function isAutoRoleCreateEnabled() {
+  return process.env.DISCORD_AUTO_CREATE_BIND_ROLES === "true";
+}
+
 function roleBindMatches(bind, robloxRole) {
   if (!robloxRole) return false;
 
@@ -57,11 +70,68 @@ function roleBindMatches(bind, robloxRole) {
   return true;
 }
 
-function getDesiredRoleIds(robloxRole) {
+async function fetchGuildRoles() {
+  const now = Date.now();
+
+  if (roleCache.expiresAt > now) {
+    return roleCache.roles;
+  }
+
+  const guildId = getGuildId();
+  const response = await axios.get(`${DISCORD_API}/guilds/${guildId}/roles`, {
+    headers: getDiscordHeaders(),
+  });
+
+  roleCache.roles = response.data || [];
+  roleCache.expiresAt = now + 1000 * 60 * 5;
+
+  return roleCache.roles;
+}
+
+async function createGuildRole(name) {
+  const guildId = getGuildId();
+  const response = await axios.post(
+    `${DISCORD_API}/guilds/${guildId}/roles`,
+    {
+      name,
+      mentionable: false,
+      hoist: false,
+    },
+    { headers: getDiscordHeaders() }
+  );
+
+  roleCache.expiresAt = 0;
+  return response.data;
+}
+
+async function findOrCreateDiscordRoleByName(name) {
+  if (!name) return null;
+
+  const roles = await fetchGuildRoles();
+  const existing = roles.find((role) => normalize(role.name) === normalize(name));
+
+  if (existing) return existing;
+  if (!isAutoRoleCreateEnabled()) return null;
+
+  return createGuildRole(name);
+}
+
+async function getAutoRoleBindIds(robloxRole) {
+  if (!isAutoRoleBindEnabled() || !robloxRole?.roleName) return [];
+
+  const role = await findOrCreateDiscordRoleByName(robloxRole.roleName);
+  return role?.id ? [role.id] : [];
+}
+
+async function getDesiredRoleIds(robloxRole) {
   const roleIds = new Set();
 
   if (process.env.DISCORD_VERIFIED_ROLE_ID) {
     roleIds.add(process.env.DISCORD_VERIFIED_ROLE_ID);
+  }
+
+  for (const roleId of await getAutoRoleBindIds(robloxRole)) {
+    roleIds.add(roleId);
   }
 
   for (const bind of parseRoleBinds()) {
@@ -73,8 +143,27 @@ function getDesiredRoleIds(robloxRole) {
   return [...roleIds];
 }
 
-function getConfiguredBindRoleIds() {
-  return parseRoleBinds().map((bind) => bind.roleId);
+async function getConfiguredBindRoleIds() {
+  const roleIds = new Set(parseRoleBinds().map((bind) => bind.roleId));
+
+  if (isAutoRoleBindEnabled()) {
+    const groupId = process.env.FLOURAI_GROUP_ID || process.env.ROBLOX_GROUP_ID;
+    const discordRoles = await fetchGuildRoles();
+    const discordRoleByName = new Map(
+      discordRoles.map((role) => [normalize(role.name), role.id])
+    );
+
+    if (groupId) {
+      const robloxRoles = await getGroupRoles(groupId).catch(() => []);
+
+      for (const robloxRole of robloxRoles) {
+        const discordRoleId = discordRoleByName.get(normalize(robloxRole.name));
+        if (discordRoleId) roleIds.add(discordRoleId);
+      }
+    }
+  }
+
+  return [...roleIds];
 }
 
 function formatNickname(robloxUser, robloxRole) {
@@ -199,7 +288,7 @@ async function applyDiscordVerification({
   robloxUser,
   robloxRole,
 }) {
-  const desiredRoleIds = getDesiredRoleIds(robloxRole);
+  const desiredRoleIds = await getDesiredRoleIds(robloxRole);
   const nickname = formatNickname(robloxUser, robloxRole);
   let member = await fetchGuildMember(discordUser.id);
   let joined = false;
@@ -226,7 +315,7 @@ async function applyDiscordVerification({
     if (process.env.DISCORD_REMOVE_UNMATCHED_BIND_ROLES === "true") {
       const desired = new Set(desiredRoleIds);
 
-      for (const roleId of getConfiguredBindRoleIds()) {
+      for (const roleId of await getConfiguredBindRoleIds()) {
         if (member?.roles?.includes(roleId) && !desired.has(roleId)) {
           await removeRole(discordUser.id, roleId);
         }
@@ -248,5 +337,6 @@ module.exports = {
   exchangeDiscordCode,
   getDiscordUser,
   getDesiredRoleIds,
+  isAutoRoleBindEnabled,
   parseRoleBinds,
 };
